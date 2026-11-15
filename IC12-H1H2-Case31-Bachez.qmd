@@ -1,0 +1,298 @@
+---
+title: "IC12: Summary of Data Analysis: H1 & H2"
+subtitle: "Case 31: Employees Federal Credit Union"
+author: "Kevin Bachez"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    theme: cosmo
+    page-layout: full
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+
+# Packages ----------------------------------------------------------------
+library(haven)    # read SPSS .sav files
+library(dplyr)    # data wrangling
+library(tidyr)    # reshaping
+library(ggplot2)  # charts
+library(knitr)    # tables
+library(car)      # Levene's test
+
+# Data: instructor-provided cleaned file (Case 31 Data_efcu_4.sav) ---------
+# Keep the .sav file in the same folder as this .qmd file
+efcu <- read_sav("Case 31 Data_efcu_4.sav")
+
+aware_labels <- c("Unaware", "Aware, not used", "Aware & used")
+agree_labels <- c("Strongly Disagree", "Disagree", "Uncertain",
+                  "Agree", "Strongly Agree")
+
+efcu <- efcu |>
+  mutate(
+    # H1 IV: Q13r (1 = Unaware, 2 = Aware but not used, 3 = Aware and used)
+    aware_share = factor(as.numeric(q13_r), levels = 1:3, labels = aware_labels),
+    q33 = as.numeric(q33),
+    # H2 measures
+    q8r = as.numeric(Q8_r),   # 1 = Very Low ... 5 = Very High ("No Opinion" = missing)
+    q30 = as.numeric(q30)     # 1 = Strongly Disagree ... 5 = Strongly Agree
+  )
+
+# Helper: format p-values ---------------------------------------------------
+fp <- function(p) format.pval(p, digits = 3, eps = .001)
+```
+
+# Hypotheses & Analysis Plan
+
+```{r}
+#| label: tbl-plan
+#| tbl-cap: "Data analysis table for H1 and H2"
+
+tibble(
+  Hypothesis = c("H1", "H2"),
+  Statement = c(
+    "Members' awareness of the regular share account will influence their opinions on the adequacy of financial services in meeting members' needs.",
+    "Members will not be different in their opinion on CU's loan rate (Q8r) and the degree to which they agree that CU's loan rate is lower than competitors (Q30)."),
+  Variables = c("Q13r (IV); Q33 (DV)", "Q8r; Q30 (two measures, same members)"),
+  Scale = c("Ordinal, 3 groups (IV); Interval (DV)", "Interval; Interval"),
+  `Statistical test` = c("One-way ANOVA (Tukey HSD post hoc)", "Paired-samples t-test")
+) |>
+  kable()
+```
+
+**Why these tests?**
+
+- **H1, one-way ANOVA.** The independent variable, awareness of the regular share account (Q13r), splits members into **three** separate groups: unaware, aware but not used, and aware and used. The dependent variable, agreement that services meet members' needs (Q33), is an interval rating. Comparing the mean of an interval variable across three or more independent groups calls for a one-way ANOVA. A t-test can only compare two groups. If the ANOVA is significant, Tukey HSD post hoc tests show which groups differ.
+- **H2, paired-samples t-test.** H2 compares **two ratings given by the same members**, their opinion of the CU's loan rates (Q8r) and their agreement that CU's rates are lower than competitors' (Q30). Both are 5-point interval ratings. Because each member answers both questions, the two scores are not independent. The paired t-test compares the two means within the same people.
+
+The sample has `r nrow(efcu)` members. Following Case Exhibit 31.2, "No Opinion" answers to Q8 are treated as missing.
+
+# H1: Awareness of Regular Share Account → Services Meet Needs
+
+## H1: Descriptive Statistics
+
+```{r}
+#| label: tbl-h1-desc
+#| tbl-cap: "Agreement that CU's financial services meet members' needs (Q33) by awareness of the regular share account (Q13r)"
+
+efcu |>
+  filter(!is.na(aware_share), !is.na(q33)) |>
+  group_by(`Awareness (Q13r)` = aware_share) |>
+  summarise(n = n(),
+            Mean = round(mean(q33), 2),
+            SD = round(sd(q33), 2),
+            `% Agree/Strongly Agree` = round(100 * mean(q33 >= 4), 1),
+            `% Disagree/Strongly Disagree` = round(100 * mean(q33 <= 2), 1)) |>
+  kable()
+```
+
+```{r}
+#| label: fig-h1
+#| fig-cap: "Agreement that services meet members' needs (Q33) by awareness of the regular share account"
+#| fig-width: 9
+#| fig-height: 3.5
+
+efcu |>
+  filter(!is.na(aware_share), !is.na(q33)) |>
+  mutate(Group = case_when(q33 >= 4 ~ "Agree",
+                           q33 == 3 ~ "Uncertain",
+                           TRUE ~ "Disagree"),
+         Group = factor(Group, levels = c("Disagree", "Uncertain", "Agree"))) |>
+  count(aware_share, Group) |>
+  group_by(aware_share) |>
+  mutate(pct = round(100 * n / sum(n), 1)) |>
+  ggplot(aes(x = aware_share, y = pct, fill = Group)) +
+  geom_col() +
+  geom_text(aes(label = ifelse(pct >= 5, paste0(pct, "%"), "")),
+            position = position_stack(vjust = 0.5), size = 3) +
+  coord_flip() +
+  scale_fill_manual(values = c(Disagree = "#d6604d", Uncertain = "grey80",
+                               Agree = "#4393c3")) +
+  labs(x = NULL, y = "%", fill = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+## H1: One-Way ANOVA
+
+```{r}
+#| label: tbl-h1-levene
+#| tbl-cap: "Levene's test of homogeneity of variances (Q33 by Q13r)"
+
+lev <- leveneTest(q33 ~ aware_share, data = efcu)
+tibble(`F` = round(lev$`F value`[1], 2),
+       df1 = lev$Df[1], df2 = lev$Df[2],
+       p = fp(lev$`Pr(>F)`[1])) |>
+  kable()
+```
+
+```{r}
+#| label: tbl-h1-anova
+#| tbl-cap: "One-way ANOVA: Q33 by awareness of the regular share account"
+
+h1_aov <- aov(q33 ~ aware_share, data = efcu)
+h1_sum <- summary(h1_aov)[[1]]
+eta_sq <- h1_sum$`Sum Sq`[1] / sum(h1_sum$`Sum Sq`)
+
+tibble(Source = c("Between groups (Q13r)", "Within groups", "Total"),
+       SS = round(c(h1_sum$`Sum Sq`, sum(h1_sum$`Sum Sq`)), 2),
+       df = c(h1_sum$Df, sum(h1_sum$Df)),
+       MS = c(round(h1_sum$`Mean Sq`, 3), NA),
+       `F` = c(round(h1_sum$`F value`[1], 2), NA, NA),
+       p = c(fp(h1_sum$`Pr(>F)`[1]), "", ""),
+       `Eta squared` = c(round(eta_sq, 3), NA, NA)) |>
+  kable()
+```
+
+## H1: Tukey HSD Post Hoc Tests
+
+```{r}
+#| label: tbl-h1-tukey
+#| tbl-cap: "Tukey HSD multiple comparisons of Q33 means"
+
+TukeyHSD(h1_aov)$aware_share |>
+  as.data.frame() |>
+  tibble::rownames_to_column("Comparison") |>
+  transmute(Comparison,
+            `Mean difference` = round(diff, 2),
+            `95% CI lower` = round(lwr, 2),
+            `95% CI upper` = round(upr, 2),
+            `Adjusted p` = fp(`p adj`)) |>
+  kable()
+```
+
+## H1: Insight
+
+**Insight.** Awareness of the regular share account does influence whether members feel the credit union meets their needs, but **not in the expected direction**. Members who are unaware of the account (M = 3.63) and those who know it but have not used it (M = 3.72) mostly agree that the CU's services meet their needs. In contrast, the small group who have actually used the account is noticeably less satisfied (M = 3.08) (@tbl-h1-desc). Only 30.8% of users agree, and 23.1% disagree, compared with about 63% agreement in each of the other two groups (@fig-h1). The three groups differ significantly (F(2, 125) = 4.63, p = .011; @tbl-h1-anova). Account users are less satisfied than both unaware members (p = .017) and aware non-users (p = .011), while those two groups do not differ (p = .782; @tbl-h1-tukey). **H1 is supported.**
+
+For the board, this suggests that **using** the credit union's account products may expose service gaps that other members never run into. Those gaps could be in rates, features, or how statements and transactions are handled. Only 13 members are in the "aware and used" group, so the finding should be confirmed with a larger sample. Even so, it is a warning sign, because these are the members with the closest relationship to the credit union. As noted in R5, most members (64.8%) say they are unaware of the "regular share account" even though it is what makes them members. This points to a naming problem: members may not recognize the product by that name.
+
+# H2: Opinion of CU Loan Rates (Q8r) vs. CU Rates Lower Than Competitors (Q30)
+
+## H2: Descriptive Statistics
+
+```{r}
+#| label: tbl-h2-desc
+#| tbl-cap: "Loan rate opinions among members who answered both items (paired cases)"
+
+h2 <- efcu |> filter(!is.na(q8r), !is.na(q30))
+
+tibble(
+  Measure = c("Q8r: Opinion of rates CU charges on loans (5 = Very High)",
+              "Q30: CU loan rates lower than others (5 = Strongly Agree)"),
+  n = nrow(h2),
+  Mean = round(c(mean(h2$q8r), mean(h2$q30)), 2),
+  SD = round(c(sd(h2$q8r), sd(h2$q30)), 2),
+  `% Low (1–2)` = round(100 * c(mean(h2$q8r <= 2), mean(h2$q30 <= 2)), 1),
+  `% Middle (3)` = round(100 * c(mean(h2$q8r == 3), mean(h2$q30 == 3)), 1),
+  `% High (4–5)` = round(100 * c(mean(h2$q8r >= 4), mean(h2$q30 >= 4)), 1)
+) |>
+  kable()
+```
+
+```{r}
+#| label: fig-h2
+#| fig-cap: "Distribution of responses to Q8r and Q30 (paired cases)"
+#| fig-width: 9
+#| fig-height: 3.5
+
+h2 |>
+  select(q8r, q30) |>
+  pivot_longer(everything(), names_to = "var", values_to = "value") |>
+  mutate(Item = ifelse(var == "q8r",
+                       "Q8r: CU loan rates are... (1 = Very Low, 5 = Very High)",
+                       "Q30: CU rates lower than others (1 = SD, 5 = SA)")) |>
+  count(Item, value) |>
+  group_by(Item) |>
+  mutate(pct = round(100 * n / sum(n), 1)) |>
+  ggplot(aes(x = factor(value), y = pct)) +
+  geom_col(fill = "darkorange") +
+  geom_text(aes(label = paste0(pct, "%")), vjust = -0.4, size = 3) +
+  facet_wrap(~ Item) +
+  labs(x = "Response (1–5)", y = "Valid %") +
+  theme_minimal()
+```
+
+## H2: Paired-Samples t-test
+
+```{r}
+#| label: tbl-h2-corr
+#| tbl-cap: "Paired-samples correlation between Q8r and Q30"
+
+h2_cor <- cor.test(h2$q8r, h2$q30)
+tibble(Pair = "Q8r & Q30", n = nrow(h2),
+       r = round(unname(h2_cor$estimate), 2),
+       p = fp(h2_cor$p.value)) |>
+  kable()
+```
+
+```{r}
+#| label: tbl-h2-t
+#| tbl-cap: "Paired-samples t-test: Q8r vs. Q30"
+
+h2_t <- t.test(h2$q8r, h2$q30, paired = TRUE)
+d <- h2$q8r - h2$q30
+tibble(Pair = "Q8r − Q30",
+       `Mean difference` = round(mean(d), 2),
+       `SD of difference` = round(sd(d), 2),
+       `95% CI lower` = round(h2_t$conf.int[1], 2),
+       `95% CI upper` = round(h2_t$conf.int[2], 2),
+       t = round(unname(h2_t$statistic), 2),
+       df = unname(h2_t$parameter),
+       p = fp(h2_t$p.value),
+       `Cohen's d` = round(mean(d) / sd(d), 2)) |>
+  kable()
+```
+
+## H2: Insight
+
+**Insight.** Members' two loan rate ratings sit at almost the same point on the scale, so **H2 is supported**. Opinion of the CU's loan rates averages 3.14, just above "average." Agreement that the CU's rates beat competitors' averages 3.06, just above "uncertain" (@tbl-h2-desc). The difference between the two is tiny and not significant (t(106) = 0.60, p = .549; @tbl-h2-t). Both measures cluster in the middle: most members call the rates "average" (55.1%) and are "uncertain" whether they beat competitors (41.1%) (@fig-h2).
+
+Note that the two questions point in **opposite directions**. A high Q8r means the member thinks rates are *high*, while a high Q30 means the member thinks rates are *lower* than elsewhere. So the two answers are strongly negatively related (r = −.49, p < .001; @tbl-h2-corr): members who think rates are high tend to disagree that they beat competitors, as we would expect. The matching means therefore do not mean members hold two different views. Both questions tell the same story: members see the CU's loan rates as **ordinary, not a bargain**. This supports the R2 finding that the rate advantage a credit union should offer is not reaching members. It also helps explain why members borrow elsewhere.
+
+# Summary
+
+## Key Takeaways
+
+```{r}
+#| label: tbl-summary
+#| tbl-cap: "Summary of hypothesis tests"
+
+tibble(
+  Hypothesis = c("H1", "H2"),
+  Test = c("One-way ANOVA", "Paired-samples t-test"),
+  Result = c("F(2, 125) = 4.63, p = .011", "t(106) = 0.60, p = .549"),
+  Decision = c("Supported", "Supported"),
+  Finding = c(
+    "Members who have used the regular share account are less likely to feel CU services meet their needs (M = 3.08) than unaware members (3.63) or aware non-users (3.72)",
+    "Members rate CU loan rates as average and are unsure they beat competitors; both measures sit at the scale midpoint"),
+  Implication = c(
+    "Find out why active account users are less satisfied; rename or explain the 'regular share account'",
+    "Communicate and benchmark loan rates against competitors to create a clear reason to borrow at the CU")
+) |>
+  kable()
+```
+
+# Appendix
+
+## Links
+
+- **GitHub Repository:** [View Repository](https://github.com/kebachez/IC-Case-31--Summary-of-Data-Analysis-for-H1-H2.git)
+- **GitHub Pages:** [View Published Report](https://kebachez.github.io/IC-Case-31--Summary-of-Data-Analysis-for-H1-H2/)
+
+## R Code
+
+```{r}
+#| label: all-code
+#| ref.label: !expr knitr::all_labels()
+#| echo: true
+#| eval: false
+```
